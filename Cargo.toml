@@ -1,0 +1,6 @@
+[package]
+name = "makeless"
+version = "0.1.0-master"
+authors = ["Craig M. Brandenburg <c.m.brandenburg@gmail.com>"]
+
+[dependencies]
