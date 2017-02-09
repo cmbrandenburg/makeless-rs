@@ -23,6 +23,8 @@
 //!
 //! TODO: Example
 
+extern crate num_cpus;
+
 mod builder;
 mod error;
 mod task;

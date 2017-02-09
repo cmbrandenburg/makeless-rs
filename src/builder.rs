@@ -31,6 +31,6 @@ impl Builder {
     /// Begins running the task queue's default task, starting with that task's
     /// dependencies.
     pub fn start(self) -> Result<Runner, Error> {
-        unimplemented!();
+        Runner::new(self.task_set, self.default_target)
     }
 }

@@ -1,4 +1,4 @@
-use std;
+use {Error, std};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -55,6 +55,7 @@ pub struct DependencyScan<'a> {
 ///
 /// Applications should not use `TaskSet` directly.
 ///
+#[derive(Debug)]
 pub struct TaskSet {
     inner: HashMap<PathBuf, Task>,
 }
@@ -66,6 +67,14 @@ impl TaskSet {
 
     pub fn insert(&mut self, task: Task) -> Option<Task> {
         self.inner.insert(task.target.clone(), task)
+    }
+
+    pub fn get(&self, target: &Path) -> Option<&Task> {
+        self.inner.get(target)
+    }
+
+    pub fn remove(&mut self, target: &Path) -> Option<Task> {
+        self.inner.remove(target)
     }
 
     pub fn scan_dependencies(&self) -> DependencyScan {
@@ -127,6 +136,24 @@ impl TaskSet {
 
         scan
     }
+
+    pub fn all_targets_recursive<I, P>(&self, top_targets: I) -> HashSet<PathBuf>
+        where I: IntoIterator<Item = P>,
+              P: Into<PathBuf>
+    {
+        debug_assert_eq!(self.scan_dependencies(), DependencyScan::default());
+
+        let mut bucket = HashSet::new();
+        let mut pending = top_targets.into_iter().map(|x| x.into()).collect::<Vec<_>>();
+
+        while let Some(dot) = pending.pop() {
+            let dot_task = self.inner.get(&dot).unwrap();
+            pending.extend(dot_task.dependencies.clone());
+            bucket.insert(dot);
+        }
+
+        bucket
+    }
 }
 
 /// `Task` specifies a task that runs in the task queue.
@@ -148,9 +175,9 @@ impl TaskSet {
 ///
 pub struct Task {
     target: PathBuf,
-    recipe: Option<Box<FnOnce() -> Result<(), Box<std::error::Error>>>>,
-    phony: bool,
+    recipe: Option<Box<FnMut() -> Result<(), Error> + Send>>,
     dependencies: HashSet<PathBuf>,
+    phony: bool,
 }
 
 impl Task {
@@ -158,16 +185,27 @@ impl Task {
         Task {
             target: target.into(),
             recipe: None,
-            phony: false,
             dependencies: HashSet::new(),
+            phony: false,
         }
     }
 
     pub fn with_recipe<E, F>(mut self, recipe: F) -> Self
-        where E: 'static + std::error::Error,
-              F: 'static + FnOnce() -> Result<(), E>
+        where F: 'static + FnOnce() -> Result<(), E> + Send
     {
-        let f = || recipe().map_err(|e| -> Box<std::error::Error> { Box::new(e) });
+        // The "inner closure" is a workaround for dealing with stable Rust's
+        // Box+FnOnce limitation, combined with allowing the application to
+        // return an std::error::Error to denote failure. Basically, the inner
+        // closure promotes the application's FnOnce to a boxed FnMut, and it
+        // boxes any error that's returned. It works so long as we don't call
+        // the outer closure twice, despite its FnMut implementation.
+
+        let mut inner_closure = Some(recipe);
+        let f = move || {
+            let f = inner_closure.take().unwrap();
+            // FIXME: Propagate error information from task.
+            f().map_err(|_any| -> Error { Error::TaskError })
+        };
         self.recipe = Some(Box::new(f));
         self
     }
@@ -185,11 +223,56 @@ impl Task {
     pub fn target(&self) -> &Path {
         &self.target
     }
+
+    pub fn dependencies(&self) -> &HashSet<PathBuf> {
+        &self.dependencies
+    }
+
+    pub fn run(self) -> Result<(), Error> {
+        match self.recipe {
+            None => Ok(()),
+            Some(mut recipe) => {
+                // FIXME: Probably the panic information.
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || (*recipe)())) {
+                    Ok(x) => x,
+                    Err(_any) => Err(Error::TaskPanic),
+                }
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for Task {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+
+        // Debug is not implemented for the recipe, so we implement a custom
+        // Debug.
+
+        // Use destructuring here so that we're alerted via a compiler error
+        // whenever a new field is added to the struct.
+        #![allow(unused_variables)]
+        let &super::Task { ref target, ref recipe, ref dependencies, ref phony } = self;
+
+        #[derive(Debug)]
+        struct Task<'a> {
+            target: &'a PathBuf,
+            dependencies: &'a HashSet<PathBuf>,
+            phony: &'a bool,
+        }
+
+        let x = Task {
+            target: target,
+            dependencies: dependencies,
+            phony: phony,
+        };
+
+        (&x as &std::fmt::Debug).fmt(f)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use super::*;
 
     struct TaskSetBuilder(TaskSet);
@@ -240,201 +323,77 @@ mod tests {
             }
         }
 
-        // {} -> (), ()
-
-        {
-            let task_set = TaskSetBuilder::new().build();
-            let expected = Expected::new();
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
+        macro_rules! test_case {
+            ({$($target:ident -> ($($dep:ident),*)),*} => {$(($($cycle:ident->)*)),*}, {$($missing:ident),*}) => {
+                {
+                    let task_set =TaskSetBuilder::new()
+                        $(.with_task(Task::new(stringify!($target))$(.with_dependency(stringify!($dep)))*))*
+                        .build();
+                    let expected = Expected::new()
+                        $(.with_cyclic_dependency(vec![$(stringify!($cycle)),*]))*
+                        $(.with_missing_dependency(stringify!($missing)))*
+                        ;
+                    let got = task_set.scan_dependencies();
+                    assert_eq!(expected, got);
+                }
+            }
         }
 
-        // {A->()} -> (), ()
+        test_case!({} => {}, {});
+        test_case!({A->()} => {}, {});
+        test_case!({A->(B), B->()} => {}, {});
+        test_case!({A->(B, C), B->(), C->()} => {}, {});
+        test_case!({A->(A)} => {(A->)}, {});
+        test_case!({A->(B)} => {}, {B});
+        test_case!({A->(B, C, D)} => {}, {B, C, D});
+        test_case!({A->(B), B->(C)} => {}, {C});
+        test_case!({A->(C), B->(C), C->()} => {}, {});
+        test_case!({A->(B), B->(C), C->(D), D->()} => {}, {});
+        test_case!({A->(B), B->(C), C->(D)} => {}, {D});
+        test_case!({A->(), B->()} => {}, {});
+        test_case!({A->(B), B->(A)} => {(A->B->)}, {});
+        test_case!({A->(B), B->(C), C->(A)} => {(A->B->C->)}, {});
 
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A"))
-                .build();
-            let expected = Expected::new();
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
+        // Check that redundant dependency chains are eliminated--i.e.,
+        // A->B->C-> is redundant with B->C->.
+        test_case!({A->(B), B->(C), C->(B)} => {(B->C->)}, {});
+
+        test_case!({A->(B, C), B->(A), C->(A)} => {(A->B->), (A->C->)}, {});
+        test_case!({A->(B, C), B->(C), C->(A, B)} => {(A->C->), (B->C->)}, {});
+    }
+
+    #[test]
+    fn all_targets_recursive() {
+
+        macro_rules! test_case {
+            ({$($target:ident -> ($($dep:ident),*)),*}, {$($top:ident),*} => {$($result:ident),*}) => {
+                {
+                    let task_set =TaskSetBuilder::new()
+                        $(.with_task(Task::new(stringify!($target))$(.with_dependency(stringify!($dep)))*))*
+                        .build();
+                    static RESULTS: &'static [&'static str] = &[$(stringify!($result)),*];
+                    let expected = RESULTS
+                        .iter()
+                        .map(|&x| PathBuf::from(x))
+                        .collect::<HashSet<_>>();
+                    static TOPS: &'static [&'static str] = &[$(stringify!($top)),*];
+                    let top_targets = TOPS
+                        .iter()
+                        .map(|&x| PathBuf::from(x))
+                        .collect::<Vec<_>>();
+                    let got = task_set.all_targets_recursive(top_targets);
+                    assert_eq!(got, expected);
+                }
+            }
         }
 
-        // {A->(A)} -> (A->A), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("A"))
-                .build();
-            let expected = Expected::new().with_cyclic_dependency(vec!["A"]);
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B)} -> (), (B)
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B"))
-                .build();
-            let expected = Expected::new().with_missing_dependency("B");
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B, C, D)} -> (), (B, C, D)
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B").with_dependency("C").with_dependency("D"))
-                .build();
-            let expected =
-                Expected::new().with_missing_dependency("B").with_missing_dependency("C").with_missing_dependency("D");
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B), B->(C)} -> (), (C)
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B"))
-                .with_task(Task::new("B").with_dependency("C"))
-                .build();
-            let expected = Expected::new().with_missing_dependency("C");
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B), B->()} -> (), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B"))
-                .with_task(Task::new("B"))
-                .build();
-            let expected = Expected::new();
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(C), B->(C), C->()} -> (), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("C"))
-                .with_task(Task::new("B").with_dependency("C"))
-                .with_task(Task::new("C"))
-                .build();
-            let expected = Expected::new();
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B), B->(C), C->(D), D->()} -> (), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B"))
-                .with_task(Task::new("B").with_dependency("C"))
-                .with_task(Task::new("C").with_dependency("D"))
-                .with_task(Task::new("D"))
-                .build();
-            let expected = Expected::new();
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B), B->(C), C->(D)} -> (), (D)
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B"))
-                .with_task(Task::new("B").with_dependency("C"))
-                .with_task(Task::new("C").with_dependency("D"))
-                .build();
-            let expected = Expected::new().with_missing_dependency("D");
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(), B->()} -> (), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A"))
-                .with_task(Task::new("B"))
-                .build();
-            let expected = Expected::new();
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B), B->(A)} -> (A->B), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B"))
-                .with_task(Task::new("B").with_dependency("A"))
-                .build();
-            let expected = Expected::new().with_cyclic_dependency(vec!["A", "B"]);
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B), B->(C), C->(A)} -> (A->C), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B"))
-                .with_task(Task::new("B").with_dependency("C"))
-                .with_task(Task::new("C").with_dependency("A"))
-                .build();
-            let expected = Expected::new().with_cyclic_dependency(vec!["A", "B", "C"]);
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B), B->(C), C->(B)} -> (B->C), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B"))
-                .with_task(Task::new("B").with_dependency("C"))
-                .with_task(Task::new("C").with_dependency("B"))
-                .build();
-            let expected = Expected::new().with_cyclic_dependency(vec!["B", "C"]);
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B, C), B->(A), C->(A)} -> (A->B, A->C), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B").with_dependency("C"))
-                .with_task(Task::new("B").with_dependency("A"))
-                .with_task(Task::new("C").with_dependency("A"))
-                .build();
-            let expected =
-                Expected::new().with_cyclic_dependency(vec!["A", "B"]).with_cyclic_dependency(vec!["A", "C"]);
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
-
-        // {A->(B, C), B->(C), C->(A, B)} -> (A->C, B->C), ()
-
-        {
-            let task_set = TaskSetBuilder::new()
-                .with_task(Task::new("A").with_dependency("B").with_dependency("C"))
-                .with_task(Task::new("B").with_dependency("C"))
-                .with_task(Task::new("C").with_dependency("A").with_dependency("B"))
-                .with_task(Task::new("D"))
-                .build();
-            let expected =
-                Expected::new().with_cyclic_dependency(vec!["A", "C"]).with_cyclic_dependency(vec!["B", "C"]);
-            let got = task_set.scan_dependencies();
-            assert_eq!(expected, got);
-        }
+        test_case!({}, {} => {});
+        test_case!({A->()}, {} => {});
+        test_case!({A->()}, {A} => {A});
+        test_case!({A->(), B->()}, {A} => {A});
+        test_case!({A->(), B->()}, {A, B} => {A, B});
+        test_case!({A->(B), B->()}, {A} => {A, B});
+        test_case!({A->(B, C, D), B->(), C->(), D->()}, {A} => {A, B, C, D});
+        test_case!({A->(B, C, D), B->(C), C->(D), D->()}, {A} => {A, B, C, D});
     }
 }
