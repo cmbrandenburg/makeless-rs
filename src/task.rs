@@ -53,7 +53,7 @@ pub struct DependencyScan<'a> {
 
 /// `TaskSet` contains all tasks in a task queue.
 ///
-/// Applications should not use `TaskSet` directly.
+/// Applications should not use `TaskSet` directly but instead use `Builder`.
 ///
 #[derive(Debug)]
 pub struct TaskSet {
@@ -181,6 +181,8 @@ pub struct Task {
 }
 
 impl Task {
+    /// Constructs a new task specifying a target and otherwise having default
+    /// or empty properties.
     pub fn new<P: Into<PathBuf>>(target: P) -> Self {
         Task {
             target: target.into(),
@@ -190,6 +192,7 @@ impl Task {
         }
     }
 
+    /// Sets the task's recipe.
     pub fn with_recipe<E, F>(mut self, recipe: F) -> Self
         where F: 'static + FnOnce() -> Result<(), E> + Send
     {
@@ -210,11 +213,42 @@ impl Task {
         self
     }
 
+    /// Sets the task's recipe as a external shell command.
+    pub fn with_shell_recipe<S: Into<std::ffi::OsString>>(self, shell_command: S) -> Self {
+
+        let shell_command = shell_command.into();
+
+        self.with_recipe(move || {
+            let exit_status = std::process::Command::new("sh").arg("-c")
+                .arg(&shell_command)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit())
+                .status()
+                .map_err(|e| {
+                    Error::ShellSpawn {
+                        cause: e,
+                        shell_command: shell_command.clone(),
+                    }
+                })?;
+            if exit_status.success() {
+                Ok(())
+            } else {
+                Err(Error::ShellNonzero {
+                    exit_status: exit_status,
+                    shell_command: shell_command,
+                })
+            }
+        })
+    }
+
+    /// Sets the task's target as phony.
     pub fn with_phony(mut self, phony: bool) -> Self {
         self.phony = phony;
         self
     }
 
+    /// Adds a dependency to the task.
     pub fn with_dependency<P: Into<PathBuf>>(mut self, dependency: P) -> Self {
         self.dependencies.insert(dependency.into());
         self
@@ -395,5 +429,18 @@ mod tests {
         test_case!({A->(B), B->()}, {A} => {A, B});
         test_case!({A->(B, C, D), B->(), C->(), D->()}, {A} => {A, B, C, D});
         test_case!({A->(B, C, D), B->(C), C->(D), D->()}, {A} => {A, B, C, D});
+    }
+
+    #[test]
+    fn shell_recipe_ok() {
+        Task::new("alpha").with_phony(true).with_shell_recipe("true").run().unwrap();
+    }
+
+    #[test]
+    fn shell_recipe_nok() {
+        match Task::new("alpha").with_phony(true).with_shell_recipe("false").run() {
+            Err(Error::TaskError) => {}
+            x @ _ => panic!("Unexpected result: {:?}", x),
+        }
     }
 }

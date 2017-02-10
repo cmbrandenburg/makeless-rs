@@ -5,3 +5,6 @@ authors = ["Craig M. Brandenburg <c.m.brandenburg@gmail.com>"]
 
 [dependencies]
 num_cpus = "1.2"
+
+[dev-dependencies]
+tempdir = "0.3"

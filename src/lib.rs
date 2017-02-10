@@ -21,14 +21,30 @@
 //! speaking, the programmer specifies what needs to be done and Makeless
 //! figures out how to make it so.
 //!
-//! TODO: Example
+//! # Example
+//!
+//! ```rust
+//! extern crate makeless;
+//! extern crate tempdir;
+//!
+//! let tmp = tempdir::TempDir::new("makeless-example").unwrap();
+//!
+//! makeless::Builder::new()
+//!     .with_task(makeless::Task::new(tmp.path().join("foo"))
+//!         .with_phony(true)
+//!         .with_shell_recipe("true"))
+//!     .start()
+//!     .expect("Could not start task queue")
+//!     .join()
+//!     .expect("One or more tasks failed or worker thread panicked");
+//! ```
 
 extern crate num_cpus;
 
 mod builder;
 mod error;
-mod task;
 mod runner;
+mod task;
 
 pub use builder::Builder;
 pub use error::Error;
