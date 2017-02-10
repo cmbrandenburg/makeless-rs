@@ -39,6 +39,12 @@
 //!     .expect("One or more tasks failed or worker thread panicked");
 //! ```
 
+// FIXME: Need to check file timestamps to determine whether a target is already
+// up-to-date.
+
+// FIXME: Should change target type from string to something strongly typed. The
+// goal is to prevent 'missing dependency' errors by misuse in the application.
+
 extern crate num_cpus;
 
 mod builder;

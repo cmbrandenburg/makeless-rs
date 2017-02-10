@@ -38,7 +38,7 @@ struct SyncState {
     // This hash map includes all top targets and all recursive dependencies. It
     // *excludes* tasks that are neither a top target nor a recursive dependency
     // of a top target.
-    target_states: HashMap<PathBuf, TaskState>,
+    task_states: HashMap<PathBuf, TaskState>,
 }
 
 impl Runner {
@@ -46,7 +46,7 @@ impl Runner {
         where I: IntoIterator<Item = P>,
               P: Into<PathBuf>
     {
-        let target_states = task_set.all_targets_recursive(top_targets.into_iter().map(|x| x.into()))
+        let task_states = task_set.all_targets_recursive(top_targets.into_iter().map(|x| x.into()))
             .into_iter()
             .map(|target| {
                 if task_set.get(&target).unwrap().dependencies().is_empty() {
@@ -61,7 +61,7 @@ impl Runner {
             sync_state: Mutex::new(SyncState {
                 task_set: task_set,
                 failed: false,
-                target_states: target_states,
+                task_states: task_states,
             }),
             worker_wakeup: Condvar::new(),
         });
@@ -79,6 +79,7 @@ impl Runner {
 
                 let mut task: Option<Task> = None;
                 loop {
+                    // If a task fails then all workers should quit.
                     let task_target = task.as_ref().map(|task| task.target().to_owned());
                     let task_result = task.map(|task| task.run());
                     if let Some(Err(_ignore_task_result)) = task_result {
@@ -90,31 +91,39 @@ impl Runner {
 
                     let mut sync_state = shared_state.sync_state.lock().unwrap();
 
+                    // FIXME: When a task completes, we need to check its
+                    // reverse dependencies and mark any that are ready as
+                    // 'pending'.
+
+                    // When a task completes, all sleeping workers should check
+                    // for new work to do.
                     if let Some(Ok(..)) = task_result {
                         let task_target = task_target.unwrap();
-                        debug_assert_eq!(sync_state.target_states.get(&task_target),
+                        debug_assert_eq!(sync_state.task_states.get(&task_target),
                                          Some(&TaskState::Running));
-                        sync_state.target_states.insert(task_target, TaskState::Done);
+                        sync_state.task_states.insert(task_target, TaskState::Done);
                         shared_state.worker_wakeup.notify_all();
                     }
 
+                    // Here's where the worker thread either finds something to
+                    // do or else goes to sleep.
                     loop {
                         if sync_state.failed {
                             return; // a task in another worker failed--stop working
                         }
-                        if sync_state.target_states.iter().all(|(_, &state)| state == TaskState::Done) {
+                        if sync_state.task_states.iter().all(|(_, &state)| state == TaskState::Done) {
                             return; // no more work to do
                         }
                         if let Some((target, _)) =
-                            sync_state.target_states
+                            sync_state.task_states
                                 .iter()
                                 .find(|&(_target, &state)| state == TaskState::Pending)
                                 .map(|(target, state)| (target.clone(), state)) {
                             task = sync_state.task_set.remove(&target);
                             debug_assert!(task.is_some());
-                            debug_assert_eq!(sync_state.target_states.get(&target),
+                            debug_assert_eq!(sync_state.task_states.get(&target),
                                              Some(&TaskState::Pending));
-                            sync_state.target_states.insert(target, TaskState::Running);
+                            sync_state.task_states.insert(target, TaskState::Running);
                             break;
                         }
                         sync_state = shared_state.worker_wakeup.wait(sync_state).unwrap();
