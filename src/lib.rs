@@ -2,7 +2,7 @@
 //! tasks run in parallel and dependencies are file system paths whose
 //! modification timestamp is used to determine whether a task is up-to-date and
 //! can be skipped. In short, Makeless is directly inspired by Make, but where
-//! the programmer uses Rust instead of Makefiles.
+//! the programmer programs in Rust, not the Make language.
 //!
 //! # Makeless is a library, not a language
 //!
