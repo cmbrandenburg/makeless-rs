@@ -47,12 +47,8 @@
 
 extern crate num_cpus;
 
-mod builder;
 mod error;
-mod runner;
 mod task;
 
-pub use builder::Builder;
 pub use error::Error;
-pub use runner::Runner;
-pub use task::{Task, TaskQueue};
+pub use task::{Runner, Task, TaskQueue};
