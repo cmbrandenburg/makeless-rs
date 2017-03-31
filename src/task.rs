@@ -20,16 +20,15 @@ impl<'a> DependencyChain<'a> {
 
         // Need to find the smallest target value and rotate the vector so that
         // it's the first element. E.g., [C, D, A, B] -> [A, B, C, D].
-        let index_smallest = targets.iter()
+        let index_smallest = targets
+            .iter()
             .enumerate()
-            .min_by(|&(_i, &ipath), &(_j, &jpath)| {
-                if ipath < jpath {
-                    std::cmp::Ordering::Less
-                } else if ipath == jpath {
-                    std::cmp::Ordering::Equal
-                } else {
-                    std::cmp::Ordering::Greater
-                }
+            .min_by(|&(_i, &ipath), &(_j, &jpath)| if ipath < jpath {
+                        std::cmp::Ordering::Less
+                    } else if ipath == jpath {
+                std::cmp::Ordering::Equal
+            } else {
+                std::cmp::Ordering::Greater
             })
             .unwrap()
             .0;
@@ -89,8 +88,12 @@ impl TaskSet {
             // A->B->C.
 
             let dot_target = &dot.target;
-            if let Some((index, _)) = dep_path.iter().enumerate().find(|&(_index, &x)| x == dot_target) {
-                scan.cyclic_dependencies.insert(DependencyChain::new(dep_path[index..].iter().map(|&x| x)));
+            if let Some((index, _)) = dep_path
+                   .iter()
+                   .enumerate()
+                   .find(|&(_index, &x)| x == dot_target) {
+                scan.cyclic_dependencies
+                    .insert(DependencyChain::new(dep_path[index..].iter().map(|&x| x)));
                 return;
             }
 
@@ -116,8 +119,10 @@ impl TaskSet {
         // B->C, in which case we should delete A->B->C.
 
         scan.cyclic_dependencies = {
-            let orig_cycles =
-                scan.cyclic_dependencies.iter().map(|&DependencyChain(ref path)| &path[..]).collect::<HashSet<_>>();
+            let orig_cycles = scan.cyclic_dependencies
+                .iter()
+                .map(|&DependencyChain(ref path)| &path[..])
+                .collect::<HashSet<_>>();
             let mut unique_cycles = HashSet::new();
             for &path in &orig_cycles {
                 let mut nok = false;
@@ -131,7 +136,10 @@ impl TaskSet {
                     unique_cycles.insert(path.clone());
                 }
             }
-            unique_cycles.iter().map(|&x| DependencyChain(Vec::from(x))).collect::<HashSet<_>>()
+            unique_cycles
+                .iter()
+                .map(|&x| DependencyChain(Vec::from(x)))
+                .collect::<HashSet<_>>()
         };
 
         scan
@@ -144,7 +152,10 @@ impl TaskSet {
         debug_assert_eq!(self.scan_dependencies(), DependencyScan::default());
 
         let mut bucket = HashSet::new();
-        let mut pending = top_targets.into_iter().map(|x| x.into()).collect::<Vec<_>>();
+        let mut pending = top_targets
+            .into_iter()
+            .map(|x| x.into())
+            .collect::<Vec<_>>();
 
         while let Some(dot) = pending.pop() {
             let dot_task = self.inner.get(&dot).unwrap();
@@ -226,18 +237,18 @@ impl Task {
                 .stderr(std::process::Stdio::inherit())
                 .status()
                 .map_err(|e| {
-                    Error::ShellSpawn {
-                        cause: e,
-                        shell_command: shell_command.clone(),
-                    }
-                })?;
+                             Error::ShellSpawn {
+                                 cause: e,
+                                 shell_command: shell_command.clone(),
+                             }
+                         })?;
             if exit_status.success() {
                 Ok(())
             } else {
                 Err(Error::ShellNonzero {
-                    exit_status: exit_status,
-                    shell_command: shell_command,
-                })
+                        exit_status: exit_status,
+                        shell_command: shell_command,
+                    })
             }
         })
     }
@@ -285,7 +296,12 @@ impl std::fmt::Debug for Task {
         // Use destructuring here so that we're alerted via a compiler error
         // whenever a new field is added to the struct.
         #![allow(unused_variables)]
-        let &super::Task { ref target, ref recipe, ref dependencies, ref phony } = self;
+        let &super::Task {
+                 ref target,
+                 ref recipe,
+                 ref dependencies,
+                 ref phony,
+             } = self;
 
         #[derive(Debug)]
         struct Task<'a> {
@@ -306,8 +322,8 @@ impl std::fmt::Debug for Task {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
     use super::*;
+    use std::path::{Path, PathBuf};
 
     struct TaskSetBuilder(TaskSet);
 
@@ -341,7 +357,9 @@ mod tests {
                 where I: IntoIterator<Item = &'static str>
             {
                 let targets = targets.into_iter().map(|x| Path::new(x));
-                self.0.cyclic_dependencies.insert(DependencyChain::new(targets));
+                self.0
+                    .cyclic_dependencies
+                    .insert(DependencyChain::new(targets));
                 self
             }
 
@@ -433,12 +451,19 @@ mod tests {
 
     #[test]
     fn shell_recipe_ok() {
-        Task::new("alpha").with_phony(true).with_shell_recipe("true").run().unwrap();
+        Task::new("alpha")
+            .with_phony(true)
+            .with_shell_recipe("true")
+            .run()
+            .unwrap();
     }
 
     #[test]
     fn shell_recipe_nok() {
-        match Task::new("alpha").with_phony(true).with_shell_recipe("false").run() {
+        match Task::new("alpha")
+                  .with_phony(true)
+                  .with_shell_recipe("false")
+                  .run() {
             Err(Error::TaskError) => {}
             x @ _ => panic!("Unexpected result: {:?}", x),
         }

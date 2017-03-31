@@ -46,25 +46,28 @@ impl Runner {
         where I: IntoIterator<Item = P>,
               P: Into<PathBuf>
     {
-        let task_states = task_set.all_targets_recursive(top_targets.into_iter().map(|x| x.into()))
+        let task_states = task_set
+            .all_targets_recursive(top_targets.into_iter().map(|x| x.into()))
             .into_iter()
-            .map(|target| {
-                if task_set.get(&target).unwrap().dependencies().is_empty() {
-                    (target, TaskState::Pending)
-                } else {
-                    (target, TaskState::Waiting)
-                }
-            })
+            .map(|target| if task_set
+                        .get(&target)
+                        .unwrap()
+                        .dependencies()
+                        .is_empty() {
+                     (target, TaskState::Pending)
+                 } else {
+                     (target, TaskState::Waiting)
+                 })
             .collect::<HashMap<_, _>>();
 
         let shared_state = Arc::new(SharedState {
-            sync_state: Mutex::new(SyncState {
-                task_set: task_set,
-                failed: false,
-                task_states: task_states,
-            }),
-            worker_wakeup: Condvar::new(),
-        });
+                                        sync_state: Mutex::new(SyncState {
+                                                                   task_set: task_set,
+                                                                   failed: false,
+                                                                   task_states: task_states,
+                                                               }),
+                                        worker_wakeup: Condvar::new(),
+                                    });
 
         let mut worker_threads = Vec::new();
         for _ in 0..num_cpus::get() {
@@ -101,7 +104,9 @@ impl Runner {
                         let task_target = task_target.unwrap();
                         debug_assert_eq!(sync_state.task_states.get(&task_target),
                                          Some(&TaskState::Running));
-                        sync_state.task_states.insert(task_target, TaskState::Done);
+                        sync_state
+                            .task_states
+                            .insert(task_target, TaskState::Done);
                         shared_state.worker_wakeup.notify_all();
                     }
 
@@ -111,11 +116,15 @@ impl Runner {
                         if sync_state.failed {
                             return; // a task in another worker failed--stop working
                         }
-                        if sync_state.task_states.iter().all(|(_, &state)| state == TaskState::Done) {
+                        if sync_state
+                               .task_states
+                               .iter()
+                               .all(|(_, &state)| state == TaskState::Done) {
                             return; // no more work to do
                         }
                         if let Some((target, _)) =
-                            sync_state.task_states
+                            sync_state
+                                .task_states
                                 .iter()
                                 .find(|&(_target, &state)| state == TaskState::Pending)
                                 .map(|(target, state)| (target.clone(), state)) {
@@ -133,18 +142,18 @@ impl Runner {
         }
 
         Ok(Runner {
-            worker_threads: worker_threads,
-            shared_state: shared_state,
-        })
+               worker_threads: worker_threads,
+               shared_state: shared_state,
+           })
     }
 
     pub fn join(mut self) -> Result<(), Error> {
         while let Some(w) = self.worker_threads.pop() {
             w.join()
                 .map_err(|_| {
-                    // FIXME: Propagate as much of the panic information as possible.
-                    Error::WorkerPanic
-                })?;
+                             // FIXME: Propagate as much of the panic information as possible.
+                             Error::WorkerPanic
+                         })?;
         }
 
         let sync_state = self.shared_state.sync_state.lock().unwrap();
@@ -158,10 +167,10 @@ impl Runner {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use {Task, TaskSet, std};
     use std::path::Path;
     use std::sync::Arc;
-    use super::*;
 
     #[test]
     fn run_empty_task_queue() {
@@ -187,10 +196,12 @@ mod tests {
         let mut task_set = TaskSet::new();
         {
             let c = c.clone();
-            task_set.insert(Task::new("alpha").with_phony(true).with_recipe(move || -> Result<(), ()> {
-                c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                Ok(())
-            }));
+            task_set.insert(Task::new("alpha")
+                                .with_phony(true)
+                                .with_recipe(move || -> Result<(), ()> {
+                                                 c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                                 Ok(())
+                                             }));
         }
         Runner::new(task_set, std::iter::once(Path::new("alpha")))
             .unwrap()
@@ -203,11 +214,11 @@ mod tests {
     fn run_task_that_returns_error() {
         let mut task_set = TaskSet::new();
         task_set.insert(Task::new("alpha")
-            .with_phony(true)
-            .with_recipe(|| -> Result<(), &'static str> { Err("blah blah blah") }));
+                            .with_phony(true)
+                            .with_recipe(|| -> Result<(), &'static str> { Err("blah blah blah") }));
         match Runner::new(task_set, std::iter::once(Path::new("alpha")))
-            .unwrap()
-            .join() {
+                  .unwrap()
+                  .join() {
             Err(Error::TaskFailed) => {}
             x @ _ => panic!("Unexpected result {:?}", x),
         }
@@ -216,12 +227,14 @@ mod tests {
     #[test]
     fn run_task_that_panics() {
         let mut task_set = TaskSet::new();
-        task_set.insert(Task::new("alpha").with_phony(true).with_recipe(|| -> Result<(), ()> {
-            panic!("blah blah blah");
-        }));
+        task_set.insert(Task::new("alpha")
+                            .with_phony(true)
+                            .with_recipe(|| -> Result<(), ()> {
+                                             panic!("blah blah blah");
+                                         }));
         match Runner::new(task_set, std::iter::once(Path::new("alpha")))
-            .unwrap()
-            .join() {
+                  .unwrap()
+                  .join() {
             Err(Error::TaskFailed) => {}
             x @ _ => panic!("Unexpected result {:?}", x),
         }

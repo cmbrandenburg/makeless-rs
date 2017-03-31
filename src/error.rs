@@ -48,14 +48,20 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         let d = (self as &std::error::Error).description();
         match self {
-            &Error::ShellNonzero { ref shell_command, ref exit_status } => {
+            &Error::ShellNonzero {
+                 ref shell_command,
+                 ref exit_status,
+             } => {
                 write!(f,
                        "{} (command: {}, exit_status: {}",
                        d,
                        shell_command.to_str().unwrap_or("???"),
                        exit_status)
             }
-            &Error::ShellSpawn { ref shell_command, ref cause } => {
+            &Error::ShellSpawn {
+                 ref shell_command,
+                 ref cause,
+             } => {
                 write!(f,
                        "{} (command: {}): {}",
                        d,
