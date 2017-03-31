@@ -50,18 +50,18 @@ pub struct DependencyScan<'a> {
     missing_dependencies: HashSet<&'a Path>,
 }
 
-/// `TaskSet` contains all tasks in a task queue.
+/// `TaskQueue` contains all tasks in a task queue.
 ///
-/// Applications should not use `TaskSet` directly but instead use `Builder`.
+/// Applications should not use `TaskQueue` directly but instead use `Builder`.
 ///
 #[derive(Debug)]
-pub struct TaskSet {
+pub struct TaskQueue {
     inner: HashMap<PathBuf, Task>,
 }
 
-impl TaskSet {
+impl TaskQueue {
     pub fn new() -> Self {
-        TaskSet { inner: HashMap::new() }
+        TaskQueue { inner: HashMap::new() }
     }
 
     pub fn insert(&mut self, task: Task) -> Option<Task> {
@@ -79,7 +79,7 @@ impl TaskSet {
     pub fn scan_dependencies(&self) -> DependencyScan {
 
         fn recurse<'a>(dot: &'a Task,
-                       task_set: &'a TaskSet,
+                       task_queue: &'a TaskQueue,
                        mut dep_path: Vec<&'a Path>,
                        scan: &mut DependencyScan<'a>) {
 
@@ -99,12 +99,12 @@ impl TaskSet {
 
             dep_path.push(dot_target);
             for t in &dot.dependencies {
-                match task_set.inner.get(t) {
+                match task_queue.inner.get(t) {
                     None => {
                         scan.missing_dependencies.insert(t);
                     }
                     Some(next_dot) => {
-                        recurse(next_dot, task_set, dep_path.clone(), scan);
+                        recurse(next_dot, task_queue, dep_path.clone(), scan);
                     }
                 }
             }
@@ -325,11 +325,11 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    struct TaskSetBuilder(TaskSet);
+    struct TaskQueueBuilder(TaskQueue);
 
-    impl TaskSetBuilder {
+    impl TaskQueueBuilder {
         fn new() -> Self {
-            TaskSetBuilder(TaskSet::new())
+            TaskQueueBuilder(TaskQueue::new())
         }
 
         fn with_task(mut self, task: Task) -> Self {
@@ -337,7 +337,7 @@ mod tests {
             self
         }
 
-        fn build(self) -> TaskSet {
+        fn build(self) -> TaskQueue {
             self.0
         }
     }
@@ -378,14 +378,14 @@ mod tests {
         macro_rules! test_case {
             ({$($target:ident -> ($($dep:ident),*)),*} => {$(($($cycle:ident->)*)),*}, {$($missing:ident),*}) => {
                 {
-                    let task_set =TaskSetBuilder::new()
+                    let task_queue = TaskQueueBuilder::new()
                         $(.with_task(Task::new(stringify!($target))$(.with_dependency(stringify!($dep)))*))*
                         .build();
                     let expected = Expected::new()
                         $(.with_cyclic_dependency(vec![$(stringify!($cycle)),*]))*
                         $(.with_missing_dependency(stringify!($missing)))*
                         ;
-                    let got = task_set.scan_dependencies();
+                    let got = task_queue.scan_dependencies();
                     assert_eq!(expected, got);
                 }
             }
@@ -420,7 +420,7 @@ mod tests {
         macro_rules! test_case {
             ({$($target:ident -> ($($dep:ident),*)),*}, {$($top:ident),*} => {$($result:ident),*}) => {
                 {
-                    let task_set =TaskSetBuilder::new()
+                    let task_queue = TaskQueueBuilder::new()
                         $(.with_task(Task::new(stringify!($target))$(.with_dependency(stringify!($dep)))*))*
                         .build();
                     static RESULTS: &'static [&'static str] = &[$(stringify!($result)),*];
@@ -433,7 +433,7 @@ mod tests {
                         .iter()
                         .map(|&x| PathBuf::from(x))
                         .collect::<Vec<_>>();
-                    let got = task_set.all_targets_recursive(top_targets);
+                    let got = task_queue.all_targets_recursive(top_targets);
                     assert_eq!(got, expected);
                 }
             }

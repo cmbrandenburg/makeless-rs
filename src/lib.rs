@@ -55,4 +55,4 @@ mod task;
 pub use builder::Builder;
 pub use error::Error;
 pub use runner::Runner;
-pub use task::{Task, TaskSet};
+pub use task::{Task, TaskQueue};

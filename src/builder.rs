@@ -1,9 +1,9 @@
-use {Error, Runner, Task, TaskSet};
+use {Error, Runner, Task, TaskQueue};
 use std::path::PathBuf;
 
 /// `Builder` constructs a task queue in a step-by-step manner.
 pub struct Builder {
-    task_set: TaskSet,
+    task_queue: TaskQueue,
     default_target: Option<PathBuf>,
 }
 
@@ -11,7 +11,7 @@ impl Builder {
     /// Constructs a new builder with an inner task queue that's empty.
     pub fn new() -> Self {
         Builder {
-            task_set: TaskSet::new(),
+            task_queue: TaskQueue::new(),
             default_target: None,
         }
     }
@@ -24,13 +24,13 @@ impl Builder {
         if self.default_target.is_none() {
             self.default_target = Some(task.target().to_owned());
         }
-        self.task_set.insert(task);
+        self.task_queue.insert(task);
         self
     }
 
     /// Begins running the task queue's default task, starting with that task's
     /// dependencies.
     pub fn start(self) -> Result<Runner, Error> {
-        Runner::new(self.task_set, self.default_target)
+        Runner::new(self.task_queue, self.default_target)
     }
 }

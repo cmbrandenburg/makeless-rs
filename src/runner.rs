@@ -1,4 +1,4 @@
-use {Error, Task, TaskSet, num_cpus, std};
+use {Error, Task, TaskQueue, num_cpus, std};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
@@ -30,7 +30,7 @@ enum TaskState {
 
 #[derive(Debug)]
 struct SyncState {
-    task_set: TaskSet,
+    task_queue: TaskQueue,
 
     // Whether any tasks have failed.
     failed: bool,
@@ -42,14 +42,14 @@ struct SyncState {
 }
 
 impl Runner {
-    pub fn new<I, P>(task_set: TaskSet, top_targets: I) -> Result<Self, Error>
+    pub fn new<I, P>(task_queue: TaskQueue, top_targets: I) -> Result<Self, Error>
         where I: IntoIterator<Item = P>,
               P: Into<PathBuf>
     {
-        let task_states = task_set
+        let task_states = task_queue
             .all_targets_recursive(top_targets.into_iter().map(|x| x.into()))
             .into_iter()
-            .map(|target| if task_set
+            .map(|target| if task_queue
                         .get(&target)
                         .unwrap()
                         .dependencies()
@@ -62,7 +62,7 @@ impl Runner {
 
         let shared_state = Arc::new(SharedState {
                                         sync_state: Mutex::new(SyncState {
-                                                                   task_set: task_set,
+                                                                   task_queue: task_queue,
                                                                    failed: false,
                                                                    task_states: task_states,
                                                                }),
@@ -128,7 +128,7 @@ impl Runner {
                                 .iter()
                                 .find(|&(_target, &state)| state == TaskState::Pending)
                                 .map(|(target, state)| (target.clone(), state)) {
-                            task = sync_state.task_set.remove(&target);
+                            task = sync_state.task_queue.remove(&target);
                             debug_assert!(task.is_some());
                             debug_assert_eq!(sync_state.task_states.get(&target),
                                              Some(&TaskState::Pending));
@@ -168,13 +168,13 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use {Task, TaskSet, std};
+    use {Task, TaskQueue, std};
     use std::path::Path;
     use std::sync::Arc;
 
     #[test]
     fn run_empty_task_queue() {
-        Runner::new(TaskSet::new(), std::iter::empty::<&Path>())
+        Runner::new(TaskQueue::new(), std::iter::empty::<&Path>())
             .unwrap()
             .join()
             .unwrap();
@@ -182,9 +182,9 @@ mod tests {
 
     #[test]
     fn run_no_tasks_for_nonempty_task_queue() {
-        let mut task_set = TaskSet::new();
-        task_set.insert(Task::new("alpha").with_phony(true));
-        Runner::new(task_set, std::iter::empty::<&Path>())
+        let mut task_queue = TaskQueue::new();
+        task_queue.insert(Task::new("alpha").with_phony(true));
+        Runner::new(task_queue, std::iter::empty::<&Path>())
             .unwrap()
             .join()
             .unwrap();
@@ -193,17 +193,17 @@ mod tests {
     #[test]
     fn run_one_task() {
         let c = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut task_set = TaskSet::new();
+        let mut task_queue = TaskQueue::new();
         {
             let c = c.clone();
-            task_set.insert(Task::new("alpha")
-                                .with_phony(true)
-                                .with_recipe(move || -> Result<(), ()> {
-                                                 c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                                 Ok(())
-                                             }));
+            task_queue.insert(Task::new("alpha")
+                                  .with_phony(true)
+                                  .with_recipe(move || -> Result<(), ()> {
+                                                   c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                                   Ok(())
+                                               }));
         }
-        Runner::new(task_set, std::iter::once(Path::new("alpha")))
+        Runner::new(task_queue, std::iter::once(Path::new("alpha")))
             .unwrap()
             .join()
             .unwrap();
@@ -212,11 +212,11 @@ mod tests {
 
     #[test]
     fn run_task_that_returns_error() {
-        let mut task_set = TaskSet::new();
-        task_set.insert(Task::new("alpha")
-                            .with_phony(true)
-                            .with_recipe(|| -> Result<(), &'static str> { Err("blah blah blah") }));
-        match Runner::new(task_set, std::iter::once(Path::new("alpha")))
+        let mut task_queue = TaskQueue::new();
+        task_queue.insert(Task::new("alpha")
+                              .with_phony(true)
+                              .with_recipe(|| -> Result<(), &'static str> { Err("blah blah blah") }));
+        match Runner::new(task_queue, std::iter::once(Path::new("alpha")))
                   .unwrap()
                   .join() {
             Err(Error::TaskFailed) => {}
@@ -226,13 +226,13 @@ mod tests {
 
     #[test]
     fn run_task_that_panics() {
-        let mut task_set = TaskSet::new();
-        task_set.insert(Task::new("alpha")
-                            .with_phony(true)
-                            .with_recipe(|| -> Result<(), ()> {
-                                             panic!("blah blah blah");
-                                         }));
-        match Runner::new(task_set, std::iter::once(Path::new("alpha")))
+        let mut task_queue = TaskQueue::new();
+        task_queue.insert(Task::new("alpha")
+                              .with_phony(true)
+                              .with_recipe(|| -> Result<(), ()> {
+                                               panic!("blah blah blah");
+                                           }));
+        match Runner::new(task_queue, std::iter::once(Path::new("alpha")))
                   .unwrap()
                   .join() {
             Err(Error::TaskFailed) => {}
