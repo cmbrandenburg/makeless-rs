@@ -4,7 +4,9 @@ version = "0.1.0-master"
 authors = ["Craig M. Brandenburg <c.m.brandenburg@gmail.com>"]
 
 [dependencies]
+futures = "0.1"
 num_cpus = "1.2"
+petgraph = "0.4.4"
 
 [dev-dependencies]
 tempdir = "0.3"

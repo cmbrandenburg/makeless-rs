@@ -1,74 +1,58 @@
 use std;
+use std::any::Any;
+use std::borrow::Cow;
 
-/// `Error` specifies an error that occurred while managing the task queue.
-///
-/// For errors that occur while running a task, see `TaskError`.
-///
 #[derive(Debug)]
 pub enum Error {
     #[doc(hidden)]
-    ShellNonzero {
-        shell_command: std::ffi::OsString,
-        exit_status: std::process::ExitStatus,
-    },
+    RawMessage { message: String },
 
-    #[doc(hidden)]
-    ShellSpawn {
-        shell_command: std::ffi::OsString,
-        cause: std::io::Error,
-    },
-
-    #[doc(hidden)]
-    TaskError,
-
-    /// One or more tasks failed.
-    TaskFailed,
-
-    #[doc(hidden)]
-    TaskPanic,
-
-    /// A worker thread panicked.
-    WorkerPanic,
-}
-
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            &Error::ShellNonzero { .. } => "A shell command exited with nonzero status",
-            &Error::ShellSpawn { .. } => "A shell command failed to spawn",
-            &Error::TaskError => "A task returned an error",
-            &Error::TaskFailed => "One or more tasks failed",
-            &Error::TaskPanic => "A task panicked",
-            &Error::WorkerPanic => "A worker thread panicked",
-        }
-    }
+    RecipeFailure(RecipeFailureDetails),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         let d = (self as &std::error::Error).description();
-        match self {
-            &Error::ShellNonzero {
-                 ref shell_command,
-                 ref exit_status,
-             } => {
-                write!(f,
-                       "{} (command: {}, exit_status: {}",
-                       d,
-                       shell_command.to_str().unwrap_or("???"),
-                       exit_status)
-            }
-            &Error::ShellSpawn {
-                 ref shell_command,
-                 ref cause,
-             } => {
-                write!(f,
-                       "{} (command: {}): {}",
-                       d,
-                       shell_command.to_str().unwrap_or("???"),
-                       cause)
-            }
-            _ => d.fmt(f),
+        match *self {
+            Error::RawMessage { ref message } => message.fmt(f),
+            Error::RecipeFailure(ref details) => write!(f, "{}: {}", d, details),
         }
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        match *self {
+            Error::RawMessage { ref message } => &message,
+            Error::RecipeFailure { .. } => "A recipe failed",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RecipeFailureDetails {
+    recipe_error: Box<Any>,
+    recipe_error_string: Cow<'static, str>,
+}
+
+impl RecipeFailureDetails {
+    pub fn new_from_error<E: 'static + std::error::Error>(error: E) -> Self {
+        RecipeFailureDetails {
+            recipe_error_string: Cow::Owned(error.to_string()),
+            recipe_error: Box::new(error),
+        }
+    }
+
+    pub fn new_from_any<E: 'static>(any: E) -> Self {
+        RecipeFailureDetails {
+            recipe_error: Box::new(any),
+            recipe_error_string: Cow::Borrowed("Recipe error information is unavailable"),
+        }
+    }
+}
+
+impl std::fmt::Display for RecipeFailureDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        self.recipe_error_string.fmt(f)
     }
 }
